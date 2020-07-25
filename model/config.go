@@ -246,6 +246,12 @@ var ServerTLSSupportedCiphers = map[string]uint16{
 	"TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305":  tls.TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305,
 }
 
+type OAuthSettings struct {
+	AppId              *string `restricted:"true"`
+	AppSecret          *string `restricted:"true"`
+	AccessTokenBaseURL *string `restricted:"true"`
+}
+
 type ServiceSettings struct {
 	SiteURL                                           *string  `restricted:"true"`
 	WebsocketURL                                      *string  `restricted:"true"`
@@ -2737,6 +2743,7 @@ func (s *ImageProxySettings) SetDefaults(ss ServiceSettings) {
 type ConfigFunc func() *Config
 
 type Config struct {
+	OAuthSettings             OAuthSettings
 	ServiceSettings           ServiceSettings
 	TeamSettings              TeamSettings
 	ClientRequirements        ClientRequirements
