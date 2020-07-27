@@ -93,7 +93,7 @@ func (a *App) AuthenticateTokenForLogin(code string, service string) (user *mode
 	if err != nil {
 		mlog.Debug("err", mlog.Any("err", err))
 
-		user := model.User{Email: email, Nickname: nickname, Username: nickname, Roles: model.SYSTEM_USER_ROLE_ID}
+		user := model.User{Email: email, Nickname: nickname, Username: model.NewId(), Roles: model.SYSTEM_USER_ROLE_ID}
 		mlog.Debug("user", mlog.Any("user", user))
 
 		var registerUser *model.User
