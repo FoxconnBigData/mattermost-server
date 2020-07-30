@@ -1226,20 +1226,21 @@ func (s *SqlPostStore) search(teamId string, userId string, params *model.Search
 			excludedTerms = wildcard.ReplaceAllLiteralString(excludedTerms, ":* ")
 		}
 
-		excludeClause := ""
-		if excludedTerms != "" {
-			excludeClause = " & !(" + strings.Join(strings.Fields(excludedTerms), " | ") + ")"
-		}
-
-		if params.OrTerms {
-			queryParams["Terms"] = "(" + strings.Join(strings.Fields(terms), " | ") + ")" + excludeClause
-		} else {
-			queryParams["Terms"] = "(" + strings.Join(strings.Fields(terms), " & ") + ")" + excludeClause
-		}
+		//excludeClause := ""
+		//if excludedTerms != "" {
+		//	excludeClause = " & !(" + strings.Join(strings.Fields(excludedTerms), " | ") + ")"
+		//}
+		//
+		//if params.OrTerms {
+		//	queryParams["Terms"] = "(" + strings.Join(strings.Fields(terms), " | ") + ")" + excludeClause
+		//} else {
+		//	queryParams["Terms"] = "(" + strings.Join(strings.Fields(terms), " & ") + ")" + excludeClause
+		//}
 
 		//searchClause := fmt.Sprintf("AND to_tsvector('english', %s) @@ to_tsquery('english', :Terms)", searchType)
 		//searchClause := fmt.Sprintf("AND %s @@ to_tsquery('simple_zh_cfg', :Terms)", searchType)
-		searchClause := fmt.Sprintf("AND to_tsvector('simple_zh_cfg', %s) @@ to_tsquery('simple_zh_cfg', :Terms)", searchType)
+		//searchClause := fmt.Sprintf("AND to_tsvector('simple_zh_cfg', %s) @@ to_tsquery('simple_zh_cfg', :Terms)", searchType)
+		searchClause := fmt.Sprintf("AND %s LIKE '%%%s%%'", searchType, terms)
 		searchQuery = strings.Replace(searchQuery, "SEARCH_CLAUSE", searchClause, 1)
 	} else if s.DriverName() == model.DATABASE_DRIVER_MYSQL {
 		searchClause := fmt.Sprintf("AND MATCH (%s) AGAINST (:Terms IN BOOLEAN MODE)", searchType)
@@ -1260,6 +1261,8 @@ func (s *SqlPostStore) search(teamId string, userId string, params *model.Search
 			queryParams["Terms"] = strings.Join(splitTerms, " ") + excludeClause
 		}
 	}
+	mlog.Info("searchQuery", mlog.Any("searchQuery", searchQuery))
+	mlog.Info("queryParams", mlog.Any("queryParams", queryParams))
 
 	_, err := s.GetSearchReplica().Select(&posts, searchQuery, queryParams)
 	if err != nil {
