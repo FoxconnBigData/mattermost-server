@@ -18,6 +18,7 @@ import (
 	"github.com/mattermost/mattermost-server/v5/services/cache"
 	"github.com/mattermost/mattermost-server/v5/store"
 	"github.com/mattermost/mattermost-server/v5/utils"
+	"github.com/sgoby/opencc"
 )
 
 const (
@@ -1001,10 +1002,54 @@ func (a *App) SearchPostsInTeam(teamId string, paramsList []*model.SearchParams)
 	})
 }
 
+func s2tw(terms string) string {
+	s2twpOpenCC, err := opencc.NewOpenCC("s2twp")
+	if err != nil {
+		mlog.Error("s2twpOpenCC NewOpenCC error", mlog.Err(err))
+		return terms
+	}
+	twpText, err := s2twpOpenCC.ConvertText(terms)
+	if err != nil {
+		mlog.Error("s2twpOpenCC ConvertText error", mlog.Err(err))
+		return terms
+	}
+	mlog.Info("twpText", mlog.Any("twpText", twpText))
+	return twpText
+}
+
+func tw2s(terms string) string {
+	tw2spOpenCC, err := opencc.NewOpenCC("tw2sp")
+	if err != nil {
+		mlog.Error("tw2spOpenCC NewOpenCC error", mlog.Err(err))
+		return terms
+	}
+	spText, err := tw2spOpenCC.ConvertText(terms)
+	if err != nil {
+		mlog.Error("tw2spOpenCC ConvertText error", mlog.Err(err))
+		return terms
+	}
+	mlog.Info("spText", mlog.Any("spText", spText))
+	return spText
+}
+
 func (a *App) SearchPostsInTeamForUser(terms string, userId string, teamId string, isOrSearch bool, includeDeletedChannels bool, timeZoneOffset int, page, perPage int) (*model.PostSearchResults, *model.AppError) {
 	var postSearchResults *model.PostSearchResults
 	var err *model.AppError
-	paramsList := model.ParseSearchParams(strings.TrimSpace(terms), timeZoneOffset)
+
+	mlog.Info("terms", mlog.Any("terms", terms))
+
+	// Simplified Chinese
+	var sTerms = tw2s(terms)
+	mlog.Info("sTerms", mlog.Any("sTerms", sTerms))
+	paramsList := model.ParseSearchParams(strings.TrimSpace(sTerms), timeZoneOffset)
+
+	// Traditional Chinese
+	var tTerms = s2tw(terms)
+	mlog.Info("tTerms", mlog.Any("tTerms", tTerms))
+	paramsList2 := model.ParseSearchParams(strings.TrimSpace(tTerms), timeZoneOffset)
+
+	paramsList = append(paramsList, paramsList2...)
+	mlog.Info("paramsList", mlog.Any("paramsList", paramsList))
 	includeDeleted := includeDeletedChannels && *a.Config().TeamSettings.ExperimentalViewArchivedChannels
 
 	if !*a.Config().ServiceSettings.EnablePostSearch {
