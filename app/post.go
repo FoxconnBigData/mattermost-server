@@ -1037,18 +1037,24 @@ func (a *App) SearchPostsInTeamForUser(terms string, userId string, teamId strin
 	var err *model.AppError
 
 	mlog.Info("terms", mlog.Any("terms", terms))
+	paramsList := model.ParseSearchParams(strings.TrimSpace(terms), timeZoneOffset)
 
 	// Simplified Chinese
 	var sTerms = tw2s(terms)
 	mlog.Info("sTerms", mlog.Any("sTerms", sTerms))
-	paramsList := model.ParseSearchParams(strings.TrimSpace(sTerms), timeZoneOffset)
+	if terms != sTerms {
+		sTermsParamsList := model.ParseSearchParams(strings.TrimSpace(sTerms), timeZoneOffset)
+		paramsList = append(paramsList, sTermsParamsList...)
+	}
 
 	// Traditional Chinese
 	var tTerms = s2tw(terms)
 	mlog.Info("tTerms", mlog.Any("tTerms", tTerms))
-	paramsList2 := model.ParseSearchParams(strings.TrimSpace(tTerms), timeZoneOffset)
+	if terms != tTerms && sTerms != tTerms {
+		tTermsParamsList := model.ParseSearchParams(strings.TrimSpace(tTerms), timeZoneOffset)
+		paramsList = append(paramsList, tTermsParamsList...)
+	}
 
-	paramsList = append(paramsList, paramsList2...)
 	mlog.Info("paramsList", mlog.Any("paramsList", paramsList))
 	includeDeleted := includeDeletedChannels && *a.Config().TeamSettings.ExperimentalViewArchivedChannels
 
