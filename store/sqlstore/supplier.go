@@ -72,6 +72,7 @@ type SqlSupplierStores struct {
 	team                 store.TeamStore
 	channel              store.ChannelStore
 	post                 store.PostStore
+	thread               store.ThreadStore
 	user                 store.UserStore
 	bot                  store.BotStore
 	audit                store.AuditStore
@@ -89,6 +90,7 @@ type SqlSupplierStores struct {
 	emoji                store.EmojiStore
 	status               store.StatusStore
 	fileInfo             store.FileInfoStore
+	uploadSession        store.UploadSessionStore
 	reaction             store.ReactionStore
 	job                  store.JobStore
 	userAccessToken      store.UserAccessTokenStore
@@ -97,6 +99,7 @@ type SqlSupplierStores struct {
 	role                 store.RoleStore
 	scheme               store.SchemeStore
 	TermsOfService       store.TermsOfServiceStore
+	productNotices       store.ProductNoticesStore
 	group                store.GroupStore
 	UserTermsOfService   store.UserTermsOfServiceStore
 	linkMetadata         store.LinkMetadataStore
@@ -157,6 +160,8 @@ func NewSqlSupplier(settings model.SqlSettings, metrics einterfaces.MetricsInter
 	supplier.stores.emoji = newSqlEmojiStore(supplier, metrics)
 	supplier.stores.status = newSqlStatusStore(supplier)
 	supplier.stores.fileInfo = newSqlFileInfoStore(supplier, metrics)
+	supplier.stores.uploadSession = newSqlUploadSessionStore(supplier)
+	supplier.stores.thread = newSqlThreadStore(supplier)
 	supplier.stores.job = newSqlJobStore(supplier)
 	supplier.stores.userAccessToken = newSqlUserAccessTokenStore(supplier)
 	supplier.stores.channelMemberHistory = newSqlChannelMemberHistoryStore(supplier)
@@ -168,7 +173,7 @@ func NewSqlSupplier(settings model.SqlSettings, metrics einterfaces.MetricsInter
 	supplier.stores.role = newSqlRoleStore(supplier)
 	supplier.stores.scheme = newSqlSchemeStore(supplier)
 	supplier.stores.group = newSqlGroupStore(supplier)
-
+	supplier.stores.productNotices = newSqlProductNoticesStore(supplier)
 	err := supplier.GetMaster().CreateTablesIfNotExists()
 	if err != nil {
 		mlog.Critical("Error creating database tables.", mlog.Err(err))
@@ -186,6 +191,7 @@ func NewSqlSupplier(settings model.SqlSettings, metrics einterfaces.MetricsInter
 	supplier.stores.team.(*SqlTeamStore).createIndexesIfNotExists()
 	supplier.stores.channel.(*SqlChannelStore).createIndexesIfNotExists()
 	supplier.stores.post.(*SqlPostStore).createIndexesIfNotExists()
+	supplier.stores.thread.(*SqlThreadStore).createIndexesIfNotExists()
 	supplier.stores.user.(*SqlUserStore).createIndexesIfNotExists()
 	supplier.stores.bot.(*SqlBotStore).createIndexesIfNotExists()
 	supplier.stores.audit.(*SqlAuditStore).createIndexesIfNotExists()
@@ -202,10 +208,12 @@ func NewSqlSupplier(settings model.SqlSettings, metrics einterfaces.MetricsInter
 	supplier.stores.emoji.(*SqlEmojiStore).createIndexesIfNotExists()
 	supplier.stores.status.(*SqlStatusStore).createIndexesIfNotExists()
 	supplier.stores.fileInfo.(*SqlFileInfoStore).createIndexesIfNotExists()
+	supplier.stores.uploadSession.(*SqlUploadSessionStore).createIndexesIfNotExists()
 	supplier.stores.job.(*SqlJobStore).createIndexesIfNotExists()
 	supplier.stores.userAccessToken.(*SqlUserAccessTokenStore).createIndexesIfNotExists()
 	supplier.stores.plugin.(*SqlPluginStore).createIndexesIfNotExists()
 	supplier.stores.TermsOfService.(SqlTermsOfServiceStore).createIndexesIfNotExists()
+	supplier.stores.productNotices.(SqlProductNoticesStore).createIndexesIfNotExists()
 	supplier.stores.UserTermsOfService.(SqlUserTermsOfServiceStore).createIndexesIfNotExists()
 	supplier.stores.linkMetadata.(*SqlLinkMetadataStore).createIndexesIfNotExists()
 	supplier.stores.group.(*SqlGroupStore).createIndexesIfNotExists()
@@ -1134,6 +1142,10 @@ func (ss *SqlSupplier) FileInfo() store.FileInfoStore {
 	return ss.stores.fileInfo
 }
 
+func (ss *SqlSupplier) UploadSession() store.UploadSessionStore {
+	return ss.stores.uploadSession
+}
+
 func (ss *SqlSupplier) Reaction() store.ReactionStore {
 	return ss.stores.reaction
 }
@@ -1154,12 +1166,20 @@ func (ss *SqlSupplier) Plugin() store.PluginStore {
 	return ss.stores.plugin
 }
 
+func (ss *SqlSupplier) Thread() store.ThreadStore {
+	return ss.stores.thread
+}
+
 func (ss *SqlSupplier) Role() store.RoleStore {
 	return ss.stores.role
 }
 
 func (ss *SqlSupplier) TermsOfService() store.TermsOfServiceStore {
 	return ss.stores.TermsOfService
+}
+
+func (ss *SqlSupplier) ProductNotices() store.ProductNoticesStore {
+	return ss.stores.productNotices
 }
 
 func (ss *SqlSupplier) UserTermsOfService() store.UserTermsOfServiceStore {

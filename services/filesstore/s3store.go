@@ -4,7 +4,6 @@
 package filesstore
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -34,6 +33,11 @@ type S3FileBackend struct {
 	encrypt    bool
 	trace      bool
 }
+
+const (
+	// This is not exported by minio. See: https://github.com/minio/minio-go/issues/1339
+	bucketNotFound = "NoSuchBucket"
+)
 
 // Similar to s3.New() but allows initialization of signature v2 or signature v4 client.
 // If signV2 input is false, function always returns signature v4.
@@ -74,20 +78,36 @@ func (b *S3FileBackend) TestConnection() *model.AppError {
 		return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.connection.app_error", nil, err.Error(), http.StatusInternalServerError)
 	}
 
-	exists, err := s3Clnt.BucketExists(context.Background(), b.bucket)
-	if err != nil {
-		return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.bucket_exists.app_error", nil, err.Error(), http.StatusInternalServerError)
+	exists := true
+	// If a path prefix is present, we attempt to test the bucket by listing objects under the path
+	// and just checking the first response. This is because the BucketExists call is only at a bucket level
+	// and sometimes the user might only be allowed access to the specified path prefix.
+	if b.pathPrefix != "" {
+		obj := <-s3Clnt.ListObjects(context.Background(), b.bucket, s3.ListObjectsOptions{Prefix: b.pathPrefix})
+		if obj.Err != nil {
+			typedErr := s3.ToErrorResponse(obj.Err)
+			if typedErr.Code != bucketNotFound {
+				return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.list_objects.app_error", nil, obj.Err.Error(), http.StatusInternalServerError)
+			}
+			exists = false
+		}
+	} else {
+		exists, err = s3Clnt.BucketExists(context.Background(), b.bucket)
+		if err != nil {
+			return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.bucket_exists.app_error", nil, err.Error(), http.StatusInternalServerError)
+		}
 	}
 
-	if !exists {
+	if exists {
+		mlog.Debug("Connection to S3 or minio is good. Bucket exists.")
+	} else {
 		mlog.Warn("Bucket specified does not exist. Attempting to create...")
 		err := s3Clnt.MakeBucket(context.Background(), b.bucket, s3.MakeBucketOptions{Region: b.region})
 		if err != nil {
-			mlog.Error("Unable to create bucket.")
-			return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.bucked_create.app_error", nil, err.Error(), http.StatusInternalServerError)
+			return model.NewAppError("TestFileConnection", "api.file.test_connection.s3.bucket_create.app_error", nil, err.Error(), http.StatusInternalServerError)
 		}
 	}
-	mlog.Debug("Connection to S3 or minio is good. Bucket exists.")
+
 	return nil
 }
 
@@ -218,17 +238,64 @@ func (b *S3FileBackend) WriteFile(fr io.Reader, path string) (int64, *model.AppE
 	}
 
 	options := s3PutOptions(b.encrypt, contentType)
-	var buf bytes.Buffer
-	_, err = buf.ReadFrom(fr)
-	if err != nil {
-		return 0, model.NewAppError("WriteFile", "api.file.write_file.s3.app_error", nil, err.Error(), http.StatusInternalServerError)
-	}
-	info, err := s3Clnt.PutObject(context.Background(), b.bucket, path, &buf, int64(buf.Len()), options)
+	info, err := s3Clnt.PutObject(context.Background(), b.bucket, path, fr, -1, options)
 	if err != nil {
 		return info.Size, model.NewAppError("WriteFile", "api.file.write_file.s3.app_error", nil, err.Error(), http.StatusInternalServerError)
 	}
 
 	return info.Size, nil
+}
+
+func (b *S3FileBackend) AppendFile(fr io.Reader, path string) (int64, *model.AppError) {
+	s3Clnt, err := b.s3New()
+	if err != nil {
+		return 0, model.NewAppError("AppendFile", "api.file.append_file.s3.app_error", nil, err.Error(), http.StatusInternalServerError)
+	}
+
+	fp := filepath.Join(b.pathPrefix, path)
+	if _, err = s3Clnt.StatObject(context.Background(), b.bucket, fp, s3.StatObjectOptions{}); err != nil {
+		return 0, model.NewAppError("AppendFile", "api.file.append_file.s3.app_error", nil, err.Error(), http.StatusInternalServerError)
+	}
+
+	var contentType string
+	if ext := filepath.Ext(fp); model.IsFileExtImage(ext) {
+		contentType = model.GetImageMimeType(ext)
+	} else {
+		contentType = "binary/octet-stream"
+	}
+
+	options := s3PutOptions(b.encrypt, contentType)
+	sse := options.ServerSideEncryption
+	partName := fp + ".part"
+	info, err := s3Clnt.PutObject(context.Background(), b.bucket, partName, fr, -1, options)
+	defer s3Clnt.RemoveObject(context.Background(), b.bucket, partName, s3.RemoveObjectOptions{})
+	if info.Size > 0 {
+		src1Opts := s3.CopySrcOptions{
+			Bucket: b.bucket,
+			Object: fp,
+		}
+		src2Opts := s3.CopySrcOptions{
+			Bucket: b.bucket,
+			Object: partName,
+		}
+		dstOpts := s3.CopyDestOptions{
+			Bucket:     b.bucket,
+			Object:     fp,
+			Encryption: sse,
+		}
+		_, err = s3Clnt.ComposeObject(context.Background(), dstOpts, src1Opts, src2Opts)
+		if err != nil {
+			return 0, model.NewAppError("AppendFile", "api.file.append_file.s3.app_error", nil, err.Error(), http.StatusInternalServerError)
+		}
+		return info.Size, nil
+	}
+
+	var errString string
+	if err != nil {
+		errString = err.Error()
+	}
+
+	return 0, model.NewAppError("AppendFile", "api.file.append_file.s3.app_error", nil, errString, http.StatusInternalServerError)
 }
 
 func (b *S3FileBackend) RemoveFile(path string) *model.AppError {
@@ -319,6 +386,9 @@ func s3PutOptions(encrypted bool, contentType string) s3.PutObjectOptions {
 		options.ServerSideEncryption = encrypt.NewSSE()
 	}
 	options.ContentType = contentType
+	// We set the part size to the minimum allowed value of 5MBs
+	// to avoid an excessive allocation in minio.PutObject implementation.
+	options.PartSize = 1024 * 1024 * 5
 
 	return options
 }

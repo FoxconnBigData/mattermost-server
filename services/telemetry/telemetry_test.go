@@ -56,6 +56,9 @@ func initializeMocks(cfg *model.Config) (*mocks.ServerIface, *storeMocks.Store, 
 	serverIfaceMock.On("License").Return(model.NewTestLicense(), nil)
 	serverIfaceMock.On("GetRoleByName", "system_admin").Return(&model.Role{Permissions: []string{"sa-test1", "sa-test2"}}, nil)
 	serverIfaceMock.On("GetRoleByName", "system_user").Return(&model.Role{Permissions: []string{"su-test1", "su-test2"}}, nil)
+	serverIfaceMock.On("GetRoleByName", "system_user_manager").Return(&model.Role{Permissions: []string{"sum-test1", "sum-test2"}}, nil)
+	serverIfaceMock.On("GetRoleByName", "system_manager").Return(&model.Role{Permissions: []string{"sm-test1", "sm-test2"}}, nil)
+	serverIfaceMock.On("GetRoleByName", "system_read_only_admin").Return(&model.Role{Permissions: []string{"sra-test1", "sra-test2"}}, nil)
 	serverIfaceMock.On("GetRoleByName", "team_admin").Return(&model.Role{Permissions: []string{"ta-test1", "ta-test2"}}, nil)
 	serverIfaceMock.On("GetRoleByName", "team_user").Return(&model.Role{Permissions: []string{"tu-test1", "tu-test2"}}, nil)
 	serverIfaceMock.On("GetRoleByName", "team_guest").Return(&model.Role{Permissions: []string{"tg-test1", "tg-test2"}}, nil)
@@ -78,6 +81,9 @@ func initializeMocks(cfg *model.Config) (*mocks.ServerIface, *storeMocks.Store, 
 	userStore := storeMocks.UserStore{}
 	userStore.On("Count", model.UserCountOptions{IncludeBotAccounts: false, IncludeDeleted: true, ExcludeRegularUsers: false, TeamId: "", ViewRestrictions: nil}).Return(int64(10), nil)
 	userStore.On("Count", model.UserCountOptions{IncludeBotAccounts: true, IncludeDeleted: false, ExcludeRegularUsers: true, TeamId: "", ViewRestrictions: nil}).Return(int64(100), nil)
+	userStore.On("Count", model.UserCountOptions{Roles: []string{model.SYSTEM_MANAGER_ROLE_ID}}).Return(int64(5), nil)
+	userStore.On("Count", model.UserCountOptions{Roles: []string{model.SYSTEM_USER_MANAGER_ROLE_ID}}).Return(int64(10), nil)
+	userStore.On("Count", model.UserCountOptions{Roles: []string{model.SYSTEM_READ_ONLY_ADMIN_ROLE_ID}}).Return(int64(15), nil)
 	userStore.On("AnalyticsGetGuestCount").Return(int64(11), nil)
 	userStore.On("AnalyticsActiveCount", mock.Anything, model.UserCountOptions{IncludeBotAccounts: false, IncludeDeleted: false, ExcludeRegularUsers: false, TeamId: "", ViewRestrictions: nil}).Return(int64(5), nil)
 	userStore.On("AnalyticsGetInactiveUsersCount").Return(int64(8), nil)
@@ -260,7 +266,7 @@ func TestRudderTelemetry(t *testing.T) {
 	telemetryService := New(serverIfaceMock, storeMock, searchengine.NewBroker(cfg, nil), mlog.NewLogger(&mlog.LoggerConfiguration{}))
 	telemetryService.TelemetryID = telemetryID
 	telemetryService.rudderClient = nil
-	telemetryService.initRudder(server.URL, "")
+	telemetryService.initRudder(server.URL, RUDDER_KEY)
 
 	assertPayload := func(t *testing.T, actual payload, event string, properties map[string]interface{}) {
 		t.Helper()
@@ -498,5 +504,17 @@ func TestRudderTelemetry(t *testing.T) {
 				assert.Equal(t, b.Properties["installation_type"], "docker")
 			}
 		}
+	})
+
+	t.Run("RudderConfigUsesConfigForValues", func(t *testing.T) {
+		os.Setenv("RUDDER_KEY", "abc123")
+		os.Setenv("RUDDER_DATAPLANE_URL", "arudderstackplace")
+		defer os.Unsetenv("RUDDER_KEY")
+		defer os.Unsetenv("RUDDER_DATAPLANE_URL")
+
+		config := telemetryService.getRudderConfig()
+
+		assert.Equal(t, "arudderstackplace", config.DataplaneUrl)
+		assert.Equal(t, "abc123", config.RudderKey)
 	})
 }

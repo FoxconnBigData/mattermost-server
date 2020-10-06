@@ -67,6 +67,7 @@ const (
 	TRACK_PERMISSIONS_GENERAL       = "permissions_general"
 	TRACK_PERMISSIONS_SYSTEM_SCHEME = "permissions_system_scheme"
 	TRACK_PERMISSIONS_TEAM_SCHEMES  = "permissions_team_schemes"
+	TRACK_PERMISSIONS_SYSTEM_ROLES  = "permissions_system_roles"
 	TRACK_ELASTICSEARCH             = "elasticsearch"
 	TRACK_GROUPS                    = "groups"
 	TRACK_CHANNEL_MODERATION        = "channel_moderation"
@@ -96,6 +97,11 @@ type TelemetryService struct {
 	rudderClient               rudder.Client
 	TelemetryID                string
 	timestampLastTelemetrySent time.Time
+}
+
+type RudderConfig struct {
+	RudderKey    string
+	DataplaneUrl string
 }
 
 func New(srv ServerIface, dbStore store.Store, searchEngine *searchengine.Broker, log *mlog.Logger) *TelemetryService {
@@ -129,9 +135,24 @@ func (ts *TelemetryService) ensureTelemetryID() {
 	ts.TelemetryID = id
 }
 
+func (ts *TelemetryService) getRudderConfig() RudderConfig {
+	if !strings.Contains(RUDDER_KEY, "placeholder") && !strings.Contains(RUDDER_DATAPLANE_URL, "placeholder") {
+		return RudderConfig{RUDDER_KEY, RUDDER_DATAPLANE_URL}
+	} else if os.Getenv("RUDDER_KEY") != "" && os.Getenv("RUDDER_DATAPLANE_URL") != "" {
+		return RudderConfig{os.Getenv("RUDDER_KEY"), os.Getenv("RUDDER_DATAPLANE_URL")}
+	} else {
+		return RudderConfig{}
+	}
+}
+
+func (ts *TelemetryService) telemetryEnabled() bool {
+	return *ts.srv.Config().LogSettings.EnableDiagnostics && ts.srv.IsLeader()
+}
+
 func (ts *TelemetryService) sendDailyTelemetry(override bool) {
-	if *ts.srv.Config().LogSettings.EnableDiagnostics && ts.srv.IsLeader() && ((!strings.HasPrefix(RUDDER_KEY, "placeholder") && !strings.HasPrefix(RUDDER_DATAPLANE_URL, "placeholder")) || override) {
-		ts.initRudder(RUDDER_DATAPLANE_URL, RUDDER_KEY)
+	config := ts.getRudderConfig()
+	if ts.telemetryEnabled() && ((config.DataplaneUrl != "" && config.RudderKey != "") || override) {
+		ts.initRudder(config.DataplaneUrl, config.RudderKey)
 		ts.trackActivity()
 		ts.trackConfig()
 		ts.trackLicense()
@@ -387,6 +408,8 @@ func (ts *TelemetryService) trackConfig() {
 		"websocket_url":                                           isDefault(*cfg.ServiceSettings.WebsocketURL, ""),
 		"allow_cookies_for_subdomains":                            *cfg.ServiceSettings.AllowCookiesForSubdomains,
 		"enable_api_team_deletion":                                *cfg.ServiceSettings.EnableAPITeamDeletion,
+		"enable_api_user_deletion":                                *cfg.ServiceSettings.EnableAPIUserDeletion,
+		"enable_api_channel_deletion":                             *cfg.ServiceSettings.EnableAPIChannelDeletion,
 		"experimental_enable_hardened_mode":                       *cfg.ServiceSettings.ExperimentalEnableHardenedMode,
 		"disable_legacy_mfa":                                      *cfg.ServiceSettings.DisableLegacyMFA,
 		"experimental_strict_csrf_enforcement":                    *cfg.ServiceSettings.ExperimentalStrictCSRFEnforcement,
@@ -680,6 +703,7 @@ func (ts *TelemetryService) trackConfig() {
 		"restrict_system_admin":              *cfg.ExperimentalSettings.RestrictSystemAdmin,
 		"use_new_saml_library":               *cfg.ExperimentalSettings.UseNewSAMLLibrary,
 		"cloud_billing":                      *cfg.ExperimentalSettings.CloudBilling,
+		"enable_shared_channels":             *cfg.ExperimentalSettings.EnableSharedChannels,
 	})
 
 	ts.sendTelemetry(TRACK_CONFIG_ANALYTICS, map[string]interface{}{
@@ -925,15 +949,57 @@ func (ts *TelemetryService) trackPermissions() {
 		channelGuestPermissions = strings.Join(role.Permissions, " ")
 	}
 
+	systemManagerPermissions := ""
+	systemManagerPermissionsModified := false
+	if role, err := ts.srv.GetRoleByName(model.SYSTEM_MANAGER_ROLE_ID); err == nil {
+		systemManagerPermissionsModified = len(model.PermissionsChangedByPatch(role, &model.RolePatch{Permissions: &model.SystemManagerDefaultPermissions})) > 0
+		systemManagerPermissions = strings.Join(role.Permissions, " ")
+	}
+	systemManagerCount, countErr := ts.dbStore.User().Count(model.UserCountOptions{Roles: []string{model.SYSTEM_MANAGER_ROLE_ID}})
+	if countErr != nil {
+		systemManagerCount = 0
+	}
+
+	systemUserManagerPermissions := ""
+	systemUserManagerPermissionsModified := false
+	if role, err := ts.srv.GetRoleByName(model.SYSTEM_USER_MANAGER_ROLE_ID); err == nil {
+		systemUserManagerPermissionsModified = len(model.PermissionsChangedByPatch(role, &model.RolePatch{Permissions: &model.SystemUserManagerDefaultPermissions})) > 0
+		systemUserManagerPermissions = strings.Join(role.Permissions, " ")
+	}
+	systemUserManagerCount, countErr := ts.dbStore.User().Count(model.UserCountOptions{Roles: []string{model.SYSTEM_USER_MANAGER_ROLE_ID}})
+	if countErr != nil {
+		systemManagerCount = 0
+	}
+
+	systemReadOnlyAdminPermissions := ""
+	systemReadOnlyAdminPermissionsModified := false
+	if role, err := ts.srv.GetRoleByName(model.SYSTEM_READ_ONLY_ADMIN_ROLE_ID); err == nil {
+		systemReadOnlyAdminPermissionsModified = len(model.PermissionsChangedByPatch(role, &model.RolePatch{Permissions: &model.SystemReadOnlyAdminDefaultPermissions})) > 0
+		systemReadOnlyAdminPermissions = strings.Join(role.Permissions, " ")
+	}
+	systemReadOnlyAdminCount, countErr := ts.dbStore.User().Count(model.UserCountOptions{Roles: []string{model.SYSTEM_READ_ONLY_ADMIN_ROLE_ID}})
+	if countErr != nil {
+		systemReadOnlyAdminCount = 0
+	}
+
 	ts.sendTelemetry(TRACK_PERMISSIONS_SYSTEM_SCHEME, map[string]interface{}{
-		"system_admin_permissions":  systemAdminPermissions,
-		"system_user_permissions":   systemUserPermissions,
-		"team_admin_permissions":    teamAdminPermissions,
-		"team_user_permissions":     teamUserPermissions,
-		"team_guest_permissions":    teamGuestPermissions,
-		"channel_admin_permissions": channelAdminPermissions,
-		"channel_user_permissions":  channelUserPermissions,
-		"channel_guest_permissions": channelGuestPermissions,
+		"system_admin_permissions":                    systemAdminPermissions,
+		"system_user_permissions":                     systemUserPermissions,
+		"system_manager_permissions":                  systemManagerPermissions,
+		"system_user_manager_permissions":             systemUserManagerPermissions,
+		"system_read_only_admin_permissions":          systemReadOnlyAdminPermissions,
+		"team_admin_permissions":                      teamAdminPermissions,
+		"team_user_permissions":                       teamUserPermissions,
+		"team_guest_permissions":                      teamGuestPermissions,
+		"channel_admin_permissions":                   channelAdminPermissions,
+		"channel_user_permissions":                    channelUserPermissions,
+		"channel_guest_permissions":                   channelGuestPermissions,
+		"system_manager_permissions_modified":         systemManagerPermissionsModified,
+		"system_manager_count":                        systemManagerCount,
+		"system_user_manager_permissions_modified":    systemUserManagerPermissionsModified,
+		"system_user_manager_count":                   systemUserManagerCount,
+		"system_read_only_admin_permissions_modified": systemReadOnlyAdminPermissionsModified,
+		"system_read_only_admin_count":                systemReadOnlyAdminCount,
 	})
 
 	if schemes, err := ts.srv.GetSchemes(model.SCHEME_SCOPE_TEAM, 0, 100); err == nil {
@@ -1012,14 +1078,14 @@ func (ts *TelemetryService) trackGroups() {
 		mlog.Error(err.Error())
 	}
 
-	groupSyncedTeamCount, err := ts.dbStore.Team().GroupSyncedTeamCount()
-	if err != nil {
-		mlog.Error(err.Error())
+	groupSyncedTeamCount, nErr := ts.dbStore.Team().GroupSyncedTeamCount()
+	if nErr != nil {
+		mlog.Error(nErr.Error())
 	}
 
-	groupSyncedChannelCount, err := ts.dbStore.Channel().GroupSyncedChannelCount()
-	if err != nil {
-		mlog.Error(err.Error())
+	groupSyncedChannelCount, nErr := ts.dbStore.Channel().GroupSyncedChannelCount()
+	if nErr != nil {
+		mlog.Error(nErr.Error())
 	}
 
 	groupMemberCount, err := ts.dbStore.Group().GroupMemberCount()
@@ -1247,7 +1313,7 @@ func (ts *TelemetryService) trackPluginConfig(cfg *model.Config, marketplaceURL 
 			// If marketplace request failed, use predefined list
 			if marketplacePlugins == nil {
 				for _, id := range knownPluginIDs {
-					pluginConfigData["version_"+id] = pluginActivated(cfg.PluginSettings.PluginStates, id)
+					pluginConfigData["version_"+id] = pluginVersion(plugins, id)
 				}
 			} else {
 				for _, p := range marketplacePlugins {
